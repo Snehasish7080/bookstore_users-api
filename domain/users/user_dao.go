@@ -4,35 +4,33 @@ import (
 	"fmt"
 
 	"github.com/Snehasish7080/bookstore_users-api/datasources/mysql/users_db"
+	"github.com/Snehasish7080/bookstore_users-api/utils/date_utils"
 	"github.com/Snehasish7080/bookstore_users-api/utils/errors"
+	"github.com/Snehasish7080/bookstore_users-api/utils/mysql_utils"
 )
 
 const (
 	queryInsertUser = "INSERT INTO users(first_name, last_name, email, date_created) VALUES(?, ?, ?, ?);"
-)
-
-var (
-	usersDB = make(map[int64]*User)
+	queryGetUser    = "SELECT id, first_name, last_name, email, date_created FROM users WHERE id=?;"
+	queryUpdateUser = "UPDATE users SET first_name=?, last_name=?, email=? WHERE id=?;"
 )
 
 func (user *User) Get() *errors.RestErr {
 
-	if err := users_db.Client.Ping(); err != nil {
-		panic(err)
+	stmt, err := users_db.Client.Prepare(queryGetUser)
+
+	if err != nil {
+		return errors.NewInternalServerError(err.Error())
 	}
+	defer stmt.Close()
 
-	result := usersDB[user.Id]
+	result := stmt.QueryRow(user.Id)
+	if getErr := result.Scan(&user.Id, &user.FirstName, &user.LastName, &user.Email, &user.DateCreated); getErr != nil {
+		return errors.NewInternalServerError(
+			fmt.Sprintf("error when trying to get user %d: %s", user.Id, getErr.Error()),
+		)
 
-	if result == nil {
-		return errors.NewNotFoundRequestError(fmt.Sprintf("user %d not found", user.Id))
 	}
-
-	user.Id = result.Id
-	user.FirstName = result.FirstName
-	user.LastName = result.LastName
-	user.Email = result.Email
-	user.DateCreated = result.DateCreated
-
 	return nil
 }
 
@@ -44,13 +42,11 @@ func (user *User) Save() *errors.RestErr {
 	}
 
 	defer stmt.Close()
+	user.DateCreated = date_utils.GetNowString()
+	insertResult, saveErr := stmt.Exec(user.FirstName, user.LastName, user.Email, user.DateCreated)
 
-	insertResult, err := stmt.Exec(user.FirstName, user.LastName, user.Email, user.DateCreated)
-
-	if err != nil {
-		return errors.NewInternalServerError(
-			fmt.Sprintf("error when trying to save user: %s", err.Error()),
-		)
+	if saveErr != nil {
+		return mysql_utils.ParseError(saveErr)
 	}
 
 	userId, err := insertResult.LastInsertId()
@@ -61,5 +57,23 @@ func (user *User) Save() *errors.RestErr {
 		)
 	}
 	user.Id = userId
+	return nil
+}
+
+func (user *User) Update() *errors.RestErr {
+	stmt, err := users_db.Client.Prepare(queryUpdateUser)
+
+	if err != nil {
+		return errors.NewInternalServerError(err.Error())
+	}
+
+	defer stmt.Close()
+
+	_, err = stmt.Exec(user.FirstName, user.LastName, user.Email, user.Id)
+
+	if err != nil {
+		return mysql_utils.ParseError(err)
+	}
+
 	return nil
 }
